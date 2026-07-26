@@ -1,15 +1,4 @@
-"""Parallele MuJoCo-basierte Montageversuche in NVIDIA Isaac Sim.
 
-Beispiele:
-  # Zwei Aufgaben sichtbar nebeneinander
-  ./python.sh main.py --debug-two-envs
-
-  # 100 Umgebungen in einem gemeinsamen PhysX-Lauf
-  ./python.sh main.py --headless --num-envs 100
-
-  # Einzelvergleich mit MuJoCo-Zeitschritt
-  ./python.sh main.py --headless --single-validation --physics-dt 5e-5
-"""
 
 import argparse
 from pathlib import Path
