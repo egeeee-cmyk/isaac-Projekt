@@ -1,3 +1,4 @@
+#Simulationsparameter
 """Zentrale, SI-konsistente Konfiguration der MuJoCo-zu-Isaac-Uebertragung.
 
 Die MuJoCo-Referenz verwendet fuer die Finray-Finger lokale Achsen:
