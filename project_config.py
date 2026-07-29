@@ -1,4 +1,3 @@
-#Simulationsparameter
 """Zentrale, SI-konsistente Konfiguration der MuJoCo-zu-Isaac-Uebertragung.
 
 Die MuJoCo-Referenz verwendet fuer die Finray-Finger lokale Achsen:
@@ -122,6 +121,9 @@ class TaskConfig:
     socket_wall_thickness_m: float
     socket_base_thickness_m: float
     tcp_offset_above_peg_center_m: float
+    # Betrag der geschlossenen MuJoCo-Greiferachsen. Links wird der negative,
+    # rechts der positive Wert verwendet (reference_mujoco/sim.py).
+    gripper_closed_axis_position_m: float
     search_start_xyz_m: Tuple[float, float, float]
     search_tilt_deg: float
     # Inkremente entsprechen der festen MuJoCo-Suchstrategie.
@@ -150,6 +152,7 @@ TASKS: Dict[str, TaskConfig] = {
         socket_wall_thickness_m=0.008,
         socket_base_thickness_m=0.005,
         tcp_offset_above_peg_center_m=0.025,
+        gripper_closed_axis_position_m=0.0047,
         search_start_xyz_m=(-0.0011, 0.0019, 0.0800),
         search_tilt_deg=5.0,
         touch_z_delta_xyz_m=(0.0, 0.0, -0.0041),
@@ -176,7 +179,11 @@ TASKS: Dict[str, TaskConfig] = {
         socket_wall_height_m=0.030,
         socket_wall_thickness_m=0.008,
         socket_base_thickness_m=0.005,
-        tcp_offset_above_peg_center_m=0.063,
+        # MuJoCo-Griffpose: TCP z=97 mm. Das USB-Visualzentrum liegt bei
+        # body z=57 mm + 25.354 mm Meshzentrum = 82.354 mm. Daraus folgt
+        # ein TCP-Abstand von 14.646 mm statt der frueher angenommenen 63 mm.
+        tcp_offset_above_peg_center_m=0.014646,
+        gripper_closed_axis_position_m=0.0048,
         search_start_xyz_m=(0.0, -0.0012, 0.1200),
         search_tilt_deg=10.0,
         touch_z_delta_xyz_m=(-0.0026, 0.0, -0.0098),

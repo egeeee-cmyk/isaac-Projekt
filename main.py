@@ -1,4 +1,21 @@
+"""Parallele MuJoCo-basierte Montageversuche in NVIDIA Isaac Sim, Version 2.0.
 
+Beispiele:
+  # Sichtbare Isaac-Demo mit UR5e und sechs automatischen PNG-Renderings
+  ./python.sh main.py --visual-demo
+
+  # Verbindlicher Headless-Studienlauf: 50 KET12 + 50 USB
+  ./python.sh main.py --headless-study-100
+
+  # Zwei Aufgaben sichtbar nebeneinander
+  ./python.sh main.py --debug-two-envs
+
+  # Freier Headless-Lauf mit eigener Umgebungszahl
+  ./python.sh main.py --headless --num-envs 100
+
+  # Einzelvergleich mit MuJoCo-Zeitschritt
+  ./python.sh main.py --headless --single-validation --physics-dt 5e-5
+"""
 
 import argparse
 from pathlib import Path
@@ -11,7 +28,6 @@ import numpy as np
 PROJECT_DIR = Path(__file__).resolve().parent
 ASSET_DIR = PROJECT_DIR / "assets" / "mujoco"
 REFERENCE_DIR = PROJECT_DIR / "reference_mujoco"
-RESULTS_DIR = PROJECT_DIR / "results"
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
@@ -20,6 +36,39 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--num-envs", type=int, default=100)
+    parser.add_argument(
+        "--headless-study-100",
+        action="store_true",
+        help=(
+            "Erzwingt den freigegebenen Studienmodus: headless, 100 "
+            "Umgebungen, 50 KET12 und 50 USB."
+        ),
+    )
+    parser.add_argument(
+        "--visual-demo",
+        action="store_true",
+        help=(
+            "Startet zwei sichtbare Umgebungen mit UR5e-CAD und exportiert "
+            "Start-/Endbilder für Übersicht, KET12 und USB."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help=(
+            "Ergebnisordner, absolut oder relativ zum Projekt. Standard im "
+            "100er-Modus: results/headless_100."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite-results",
+        action="store_true",
+        help=(
+            "Ueberschreibt ausschliesslich bekannte Ergebnisdateien im "
+            "gewaehlten Ausgabeordner."
+        ),
+    )
     parser.add_argument("--debug-two-envs", action="store_true")
     parser.add_argument("--single-validation", action="store_true")
     parser.add_argument("--task", choices=("KET12", "USB"), default=None)
@@ -43,9 +92,72 @@ def parse_arguments():
             "Montageaufgabe."
         ),
     )
+    parser.add_argument(
+        "--export-renderings",
+        action="store_true",
+        help=(
+            "Exportiert im sichtbaren Modus reproduzierbare PNG-Ansichten "
+            "unterhalb des Ergebnisordners."
+        ),
+    )
+    parser.add_argument(
+        "--render-views",
+        nargs="+",
+        choices=("overview", "ket12", "usb"),
+        default=("overview", "ket12", "usb"),
+        help="Zu exportierende Präsentationsansichten.",
+    )
+    parser.add_argument(
+        "--render-width",
+        type=int,
+        default=1920,
+        help="Breite der PNG-Renderings; Standard 1920.",
+    )
+    parser.add_argument(
+        "--render-height",
+        type=int,
+        default=1080,
+        help="Höhe der PNG-Renderings; Standard 1080.",
+    )
+    parser.add_argument(
+        "--renderer",
+        choices=("RaytracedLighting", "PathTracing"),
+        default="RaytracedLighting",
+        help="Isaac-Renderer für Viewport und PNG-Export.",
+    )
     args, unknown = parser.parse_known_args()
     if unknown:
         print(f"Isaac/Kit-Zusatzargumente werden ignoriert: {unknown}")
+    if args.visual_demo and (
+        args.headless or args.headless_study_100 or args.single_validation
+    ):
+        parser.error(
+            "--visual-demo ist nicht mit einem Headless-/Validierungsmodus "
+            "kombinierbar."
+        )
+    if args.visual_demo and args.task is not None:
+        parser.error(
+            "--visual-demo enthält fest KET12 und USB und darf nicht mit "
+            "--task kombiniert werden."
+        )
+    if args.visual_demo:
+        args.debug_two_envs = True
+        args.export_renderings = True
+        if args.output_dir is None:
+            args.output_dir = "results/visual_demo"
+    if args.headless_study_100:
+        if args.task is not None:
+            parser.error(
+                "--headless-study-100 darf nicht mit --task kombiniert werden."
+            )
+        if args.debug_two_envs or args.single_validation:
+            parser.error(
+                "--headless-study-100 ist nicht mit Debug-/Validierungsmodus "
+                "kombinierbar."
+            )
+        args.headless = True
+        args.num_envs = 100
+        args.trace_all = False
     if args.debug_two_envs:
         args.num_envs = 2
         args.headless = False
@@ -53,6 +165,19 @@ def parse_arguments():
     if args.single_validation:
         args.num_envs = 1
         args.headless = True
+    if args.export_renderings and args.headless:
+        parser.error("--export-renderings benötigt einen sichtbaren Isaac-Modus.")
+    if (
+        args.render_width < 640
+        or args.render_height < 360
+        or args.render_width > 3840
+        or args.render_height > 2160
+        or abs(args.render_width / args.render_height - 16.0 / 9.0) > 0.02
+    ):
+        parser.error(
+            "--render-width/--render-height müssen 16:9 und zwischen "
+            "640x360 und 3840x2160 liegen."
+        )
     if args.num_envs <= 0:
         parser.error("--num-envs muss groesser als null sein.")
     return args
@@ -67,22 +192,46 @@ from isaac_imports import (
 )
 
 SimulationApp = import_simulation_app()
-simulation_app = SimulationApp({"headless": ARGS.headless})
+launch_config = {"headless": ARGS.headless}
+if not ARGS.headless:
+    launch_config.update(
+        {
+            "width": ARGS.render_width,
+            "height": ARGS.render_height,
+            "window_width": min(ARGS.render_width, 1600),
+            "window_height": min(ARGS.render_height, 1000),
+            "renderer": ARGS.renderer,
+        }
+    )
+simulation_app = SimulationApp(launch_config)
 World, DynamicCuboid, FixedCuboid = import_core_api()
-set_camera_view = import_set_camera_view()
+set_camera_view = import_set_camera_view() if not ARGS.headless else None
 
 import omni.usd
-from omni.kit.viewport.utility import (
-    get_active_viewport,
-    get_active_viewport_camera_path,
-)
-from pxr import Sdf
 
-from aggregation import aggregate_results, write_manifest, write_rows
+if not ARGS.headless:
+    from pxr import Sdf
+    from omni.kit.viewport.utility import (
+        get_active_viewport,
+        get_active_viewport_camera_path,
+    )
+else:
+    Sdf = None
+    get_active_viewport = None
+    get_active_viewport_camera_path = None
+
+from aggregation import aggregate_results, write_rows
 from evaluation import TrialMonitor, evaluate_trial, upright_tilt_deg
 from motion import quaternion_x_deg, target_pose
 from parameter_sweep import build_environment_parameters, environment_origin
 from project_config import SOLVER, STUDY, TASKS
+from project_version import PROJECT_VERSION
+from rendering import (
+    camera_pose,
+    capture_presentation_checkpoint,
+    configure_viewport_resolution,
+    write_render_manifest,
+)
 from robot_visual import (
     author_ur5e_finray_visual,
     presentation_base_translation,
@@ -97,6 +246,20 @@ from scene import (
     reset_environment,
     set_target,
 )
+from study_reporting import (
+    parameter_plan_rows,
+    prepare_results_directory,
+    resolve_results_dir,
+    utc_now_iso,
+    validate_headless_100_plan,
+    verify_physics_baseline,
+    write_automatic_evaluation,
+    write_json,
+    write_run_manifest,
+)
+
+
+RUN_CONTEXT = {}
 
 
 def _get_pose(obj):
@@ -104,9 +267,10 @@ def _get_pose(obj):
     return np.asarray(position, dtype=float), np.asarray(orientation, dtype=float)
 
 
-def _configure_camera(environments):
+def _configure_camera(environments, view_name=None):
     if ARGS.headless:
         return
+    view_name = view_name or ARGS.camera_view
     viewport = get_active_viewport()
     if viewport is None:
         raise RuntimeError("Kein aktiver Isaac-Sim-Viewport gefunden.")
@@ -115,22 +279,12 @@ def _configure_camera(environments):
     except TypeError:
         viewport.set_active_camera(Sdf.Path(RENDER_CAMERA_PATH))
 
-    if ARGS.camera_view == "overview":
-        origins = np.asarray([env.origin for env in environments], dtype=float)
-        target = np.mean(origins, axis=0) + np.array([0.0, 0.0, 0.38])
-        eye = target + np.array([1.55, 2.45, 1.25])
-    else:
-        requested_task = ARGS.camera_view.upper()
-        selected = next(
-            (
-                env
-                for env in environments
-                if env.parameters.task_id == requested_task
-            ),
-            environments[0],
-        )
-        target = selected.origin + np.array([0.0, 0.0, 0.055])
-        eye = target + np.array([0.20, 0.34, 0.18])
+    configure_viewport_resolution(
+        viewport,
+        ARGS.render_width,
+        ARGS.render_height,
+    )
+    eye, target = camera_pose(view_name, environments)
     set_camera_view(
         eye=eye,
         target=target,
@@ -143,8 +297,27 @@ def _configure_camera(environments):
             f"{active_camera}"
         )
     print(
-        f"Viewport bereit, Kamera={ARGS.camera_view}: {active_camera}",
+        f"Viewport bereit, Kamera={view_name}, "
+        f"Auflösung={viewport.resolution}: {active_camera}",
         flush=True,
+    )
+    return viewport
+
+
+def _capture_renderings(environments, results_dir, checkpoint):
+    if not ARGS.export_renderings:
+        return []
+    viewport = get_active_viewport()
+    if viewport is None:
+        raise RuntimeError("Kein aktiver Viewport für PNG-Export gefunden.")
+    return capture_presentation_checkpoint(
+        simulation_app=simulation_app,
+        viewport=viewport,
+        environments=environments,
+        configure_camera=lambda view: _configure_camera(environments, view),
+        output_dir=Path(results_dir) / "renderings",
+        checkpoint=checkpoint,
+        views=ARGS.render_views,
     )
 
 
@@ -167,6 +340,7 @@ def _apply_solver_iterations(stage, environments):
 
 
 def run():
+    started_at_utc = utc_now_iso()
     physics_dt = ARGS.physics_dt or (
         SOLVER.mujoco_reference_dt_s
         if ARGS.single_validation
@@ -177,9 +351,51 @@ def run():
         task_override=ARGS.task,
         validation_mode=ARGS.single_validation,
     )
+    results_dir = resolve_results_dir(PROJECT_DIR, ARGS)
+    prepare_results_directory(
+        results_dir,
+        overwrite=ARGS.overwrite_results,
+    )
+    RUN_CONTEXT.update(
+        {
+            "started_at_utc": started_at_utc,
+            "physics_dt_s": physics_dt,
+            "parameters": parameters,
+            "results_dir": results_dir,
+        }
+    )
+
+    baseline_check = verify_physics_baseline(PROJECT_DIR)
+    write_json(results_dir / "physics_baseline_check.json", baseline_check)
+    if not baseline_check["passed"]:
+        raise RuntimeError(
+            "Physikalisches v1.8-Grundmodell stimmt nicht mit der "
+            "gesicherten Baseline ueberein."
+        )
+
+    if ARGS.headless_study_100:
+        plan_check = validate_headless_100_plan(parameters)
+        write_json(results_dir / "parameter_plan_check.json", plan_check)
+        if not plan_check["passed"]:
+            raise RuntimeError(
+                "Ungueltiger Headless-100er-Plan: "
+                + " ".join(plan_check["issues"])
+            )
+        write_rows(
+            results_dir / "parameter_plan_100.csv",
+            parameter_plan_rows(parameters),
+        )
+    write_run_manifest(
+        results_dir / "run_manifest.json",
+        ARGS,
+        parameters,
+        physics_dt,
+        status="RUNNING",
+        started_at_utc=started_at_utc,
+    )
     print(
         f"Starte {len(parameters)} Umgebungen, dt={physics_dt:g} s, "
-        f"headless={ARGS.headless}.",
+        f"headless={ARGS.headless}, Ergebnisse={results_dir}.",
         flush=True,
     )
     print("[Setup 1/6] Physikwelt erzeugen ...", flush=True)
@@ -189,6 +405,7 @@ def run():
         stage_units_in_meters=1.0,
     )
     stage = omni.usd.get_context().get_stage()
+    render_records = []
     if not ARGS.headless:
         create_render_environment(stage)
         simulation_app.update()
@@ -209,7 +426,7 @@ def run():
             parameter,
             environment_origin(parameter.env_id, spacing_m=debug_spacing),
             ASSET_DIR,
-            show_finray_visual=(not ARGS.headless and parameter.env_id < 2),
+            show_original_visuals=(not ARGS.headless and parameter.env_id < 2),
         )
         environments.append(runtime)
         if not ARGS.headless:
@@ -275,6 +492,18 @@ def run():
             world.step(render=True)
     else:
         print("[Setup 4/6] UR5e-CAD übersprungen.", flush=True)
+
+    if ARGS.export_renderings:
+        print(
+            "[Rendering] Startzustand aus Übersicht, KET12 und USB ...",
+            flush=True,
+        )
+        world.pause()
+        render_records.extend(
+            _capture_renderings(environments, results_dir, "start")
+        )
+        _configure_camera(environments)
+        world.play()
 
     print("[Setup 5/6] Messung vorbereiten ...", flush=True)
     monitors = [
@@ -370,6 +599,25 @@ def run():
                     }
                 )
 
+    if ARGS.export_renderings:
+        print(
+            "[Rendering] Endzustand aus Übersicht, KET12 und USB ...",
+            flush=True,
+        )
+        world.pause()
+        render_records.extend(
+            _capture_renderings(environments, results_dir, "final")
+        )
+        write_render_manifest(
+            results_dir / "render_manifest.json",
+            render_records,
+            renderer=ARGS.renderer,
+            width=ARGS.render_width,
+            height=ARGS.render_height,
+            project_version=PROJECT_VERSION,
+        )
+        _configure_camera(environments)
+
     rows = []
     for env, monitor in zip(environments, monitors):
         peg_position, peg_orientation = _get_pose(env.peg)
@@ -411,12 +659,28 @@ def run():
         )
         rows.append(row)
 
-    RESULTS_DIR.mkdir(exist_ok=True)
-    write_rows(RESULTS_DIR / "environment_results.csv", rows)
-    write_rows(RESULTS_DIR / "aggregate_results.csv", aggregate_results(rows))
+    write_rows(results_dir / "environment_results.csv", rows)
+    write_rows(
+        results_dir / "aggregate_results.csv",
+        aggregate_results(rows),
+    )
     if trace_rows:
-        write_rows(RESULTS_DIR / "debug_trace.csv", trace_rows)
-    write_manifest(RESULTS_DIR / "run_manifest.json", ARGS, parameters)
+        write_rows(results_dir / "debug_trace.csv", trace_rows)
+    expected_count = 100 if ARGS.headless_study_100 else len(parameters)
+    automatic_report = write_automatic_evaluation(
+        results_dir,
+        rows,
+        expected_count=expected_count,
+    )
+    write_run_manifest(
+        results_dir / "run_manifest.json",
+        ARGS,
+        parameters,
+        physics_dt,
+        status="COMPLETED",
+        started_at_utc=started_at_utc,
+        finished_at_utc=utc_now_iso(),
+    )
     successes = sum(row["result"] == "SUCCESS" for row in rows)
     for row in rows:
         print(
@@ -430,7 +694,9 @@ def run():
         )
     print(
         f"Abgeschlossen: {successes}/{len(rows)} erfolgreich. "
-        f"Ergebnisse: {RESULTS_DIR}"
+        f"Qualitaetsgate="
+        f"{'BESTANDEN' if automatic_report['quality_gate_passed'] else 'NICHT BESTANDEN'}. "
+        f"Ergebnisse: {results_dir}"
     )
     if ARGS.debug_two_envs:
         print(
@@ -446,7 +712,22 @@ if __name__ == "__main__":
     try:
         run()
     except BaseException:
+        error_trace = traceback.format_exc()
         traceback.print_exc()
+        if RUN_CONTEXT:
+            try:
+                write_run_manifest(
+                    RUN_CONTEXT["results_dir"] / "run_manifest.json",
+                    ARGS,
+                    RUN_CONTEXT["parameters"],
+                    RUN_CONTEXT["physics_dt_s"],
+                    status="FAILED",
+                    started_at_utc=RUN_CONTEXT["started_at_utc"],
+                    finished_at_utc=utc_now_iso(),
+                    error=error_trace,
+                )
+            except Exception:
+                traceback.print_exc()
         raise
     finally:
         simulation_app.close()
