@@ -1,6 +1,4 @@
 """Reproduzierbare Isaac-Sim-Kameras und PNG-Export.
-
-Dieses Modul verändert keine Physikparameter und keine Simulationsgeometrie.
 Es steuert ausschließlich die sichtbare Projektkamera und den Viewport-Export.
 """
 
@@ -38,7 +36,6 @@ def validate_render_resolution(width, height):
 
 
 def camera_pose(view_name, environments):
-    """Berechnet feste Kamera- und Zielpositionen für eine Projektansicht."""
 
     view_name = str(view_name).lower()
     if view_name not in PRESENTATION_VIEWS:
@@ -140,12 +137,6 @@ def _is_complete_png(path):
 
 
 def _wait_for_materialized_png(output_path, simulation_app, max_updates=600):
-    """Wartet nach dem Capture-Future auf die fertig geschriebene PNG-Datei.
-
-    Isaac Sim 5.1 kann ``wait_for_result()`` bereits abschließen, während der
-    Dateischreiber noch arbeitet. Deshalb wird Kit weiter aktualisiert, bis
-    die PNG-Signatur und der abschließende IEND-Chunk vorhanden sind.
-    """
 
     output_path = Path(output_path)
     for _ in range(int(max_updates)):
@@ -234,24 +225,4 @@ def write_render_manifest(
     height,
     project_version,
 ):
-    """Schreibt einen prüfbaren Nachweis zu allen erzeugten PNG-Dateien."""
-
-    width, height = validate_render_resolution(width, height)
-    data = {
-        "project_version": str(project_version),
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(
-            timespec="seconds"
-        ),
-        "renderer": str(renderer),
-        "resolution": [width, height],
-        "image_count": len(records),
-        "images": list(records),
-        "physics_changed_by_rendering": False,
-    }
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(data, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    return data
+   
