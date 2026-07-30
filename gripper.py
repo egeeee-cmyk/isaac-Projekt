@@ -1,10 +1,7 @@
 """Ersatzgreifer mit originaler aeusserer Finray-Geometrie.
 
-Die strukturierte Nachgiebigkeit wird am gesamten Greifrahmen als 6D-D6-
-Ersatzmodell abgebildet. Der bereits gegriffene Stecker ist ueber ein
-FixedJoint mit diesem Rahmen verbunden. Damit wird nicht gleichzeitig ein
-unvalidiertes Fingerkontaktmodell als zusaetzlicher Versuchsparameter
-eingefuehrt.
+Die strukturierte Nachggiebigkeit wird am gesamten Greifrahmen als 6D-D6-
+Ersatzmodell abgebildet
 """
 
 from pathlib import Path
@@ -109,14 +106,7 @@ def _mesh_transform_relative_to_tcp(
 
 
 def original_gripper_visual_transforms(task_id, mjcf_path=None):
-    """Exakte Halter-/Fingerposen aus der MuJoCo-Hierarchie.
-
-    Der PhysX-``GraspFrame`` liegt am Steckerzentrum. Die MJCF-Geometrien
-    werden zuerst relativ zum MuJoCo-TCP berechnet und danach um den
-    aufgabenspezifischen TCP-Stecker-Abstand verschoben. Damit bleibt die
-    Greiferstruktur fuer KET12 und USB identisch; nur Greifweite und Lage des
-    jeweils gehaltenen Steckers unterscheiden sich.
-    """
+    
 
     if mjcf_path is None:
         mjcf_path = (
@@ -268,8 +258,7 @@ class GripperAssembly:
         if show_original_visuals:
             mesh = asset_dir / "finray_gripper_15_visual.obj"
             if mesh.exists() and mjcf_path.exists():
-                # Die CAD-Datei ist das unverformte aeussere Finray-Modell.
-                # Physik bleibt fuer die 100er-Studie beim D6-Ersatzmodell.
+       
                 visual = finray_visual_transforms(task_id, mjcf_path)
                 author_obj_mesh(
                     stage,
