@@ -1,15 +1,4 @@
-"""Direkter Visual-Import des UR5e aus dem MuJoCo-MJCF.
-
-Der Import ist absichtlich rein visuell. Die 100er-Physik wird weiterhin vom
-vorgegebenen TCP angetrieben, damit Roboterkinematik nicht als zusaetzlicher
-Versuchsparameter in die Nachgiebigkeitsstudie eingeht.
-
-Der UR5e wird nicht mehr nur mit der Home-Konfiguration neben die Aufgabe
-gestellt. Fuer beide Aufgaben sind reproduzierbare IK-Posen fuer alle
-TCP-Wegpunkte hinterlegt. Ihre TCP-Position wird aus derselben MJCF-Hierarchie
-berechnet, die fuer das Mesh-Authoring verwendet wird. Zwischen den
-Wegpunkten werden die Gelenkwinkel zeitgleich zur Montagebahn interpoliert.
-"""
+"""Direkter Visual-Import des UR5e aus dem MuJoCo"""
 
 from pathlib import Path
 import xml.etree.ElementTree as ET
