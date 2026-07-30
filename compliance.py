@@ -1,4 +1,4 @@
-"""Vollstaendige 6D-D6-Nachgiebigkeit mit MuJoCo-Achsenmapping."""
+"""6D-D6-Nachgiebigkeit mit MuJoCo-Achsenmapping"""
 
 import numpy as np
 
@@ -6,7 +6,6 @@ from project_config import ISAAC_COMPLIANCE, EnvironmentParameters
 
 
 def angular_drive_coefficient_per_degree(value_per_radian):
-    """USD angular DriveAPI uses degrees, MuJoCo uses radians."""
 
     return float(value_per_radian) * np.pi / 180.0
 
@@ -57,11 +56,6 @@ def compute_compliance_state(
 
 
 class StructuredComplianceJoint:
-    """D6-Joint: drei Translationen und drei endliche Rotationsdrives.
-
-    Anders als im vorherigen Isaac-Schritt sind die Rotationen nicht gesperrt:
-    Die MuJoCo-Basis besitzt 100/100/1 N*m/rad und 1 N*m*s/rad.
-    """
 
     def __init__(
         self,
@@ -87,8 +81,7 @@ class StructuredComplianceJoint:
         self.joint.CreateLocalRot1Attr().Set(identity)
         prim = self.joint.GetPrim()
 
-        # MuJoCo besitzt keine expliziten Translationsgrenzen. Diese weiten
-        # Limits sind nur ein numerischer Not-Aus fuer eine verlorene Montage.
+
         for axis in (
             UsdPhysics.Tokens.transX,
             UsdPhysics.Tokens.transY,
