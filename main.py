@@ -1,20 +1,4 @@
-"""Parallele MuJoCo-basierte Montageversuche in NVIDIA Isaac Sim, Version 2.0.
-
-Beispiele:
-  # Sichtbare Isaac-Demo mit UR5e und sechs automatischen PNG-Renderings
-  ./python.sh main.py --visual-demo
-
-  # Verbindlicher Headless-Studienlauf: 50 KET12 + 50 USB
-  ./python.sh main.py --headless-study-100
-
-  # Zwei Aufgaben sichtbar nebeneinander
-  ./python.sh main.py --debug-two-envs
-
-  # Freier Headless-Lauf mit eigener Umgebungszahl
-  ./python.sh main.py --headless --num-envs 100
-
-  # Einzelvergleich mit MuJoCo-Zeitschritt
-  ./python.sh main.py --headless --single-validation --physics-dt 5e-5
+"""Parallele MuJoCo-basierte Montageversuche in NVIDIA Isaac Sim
 """
 
 import argparse
