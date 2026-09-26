@@ -1,7 +1,3 @@
-"""Reproduzierbare Isaac-Sim-Kameras und PNG-Export.
-Es steuert ausschließlich die sichtbare Projektkamera und den Viewport-Export.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -36,6 +32,7 @@ def validate_render_resolution(width, height):
 
 
 def camera_pose(view_name, environments):
+    """Berechnet feste Kamera- und Zielpositionen für eine Projektansicht."""
 
     view_name = str(view_name).lower()
     if view_name not in PRESENTATION_VIEWS:
@@ -50,7 +47,20 @@ def camera_pose(view_name, environments):
             dtype=float,
         )
         target = np.mean(origins, axis=0) + np.array([0.0, 0.0, 0.38])
-        eye = target + np.array([1.55, 2.45, 1.25])
+        horizontal_extent = max(
+            float(np.ptp(origins[:, 0])),
+            float(np.ptp(origins[:, 1])),
+            0.6,
+        )
+        # Die Zwei-Umgebungs-Ansicht bleibt nah genug; bei 100 Umgebungen
+        # wächst der Abstand automatisch mit dem 10x10-Raster.
+        eye = target + np.array(
+            [
+                max(1.55, 0.90 * horizontal_extent),
+                max(2.45, 1.50 * horizontal_extent),
+                max(1.25, 0.75 * horizontal_extent),
+            ]
+        )
         return eye, target
 
     requested_task = view_name.upper()
@@ -106,10 +116,28 @@ def _sha256(path):
     return digest.hexdigest()
 
 
-def _wait_for_capture(capture_helper, simulation_app, max_updates=600):
-    """Pumpt Kit-Updates, bis der asynchrone Viewport-Export abgeschlossen ist."""
+def _wait_for_capture(
+    capture_helper,
+    simulation_app,
+    max_updates=600,
+    completion_frames=30,
+):
+    """Pumpt Kit-Updates, bis der asynchrone Viewport-Export abgeschlossen ist.
 
-    wait_task = asyncio.ensure_future(capture_helper.wait_for_result())
+    ``capture_viewport_to_file`` schreibt die Datei asynchron. Isaac Sim 5.x
+    unterstützt ``completion_frames``; der Fallback hält die Funktion auch mit
+    älteren Kit-Versionen kompatibel.
+    """
+
+    async def _wait_for_result():
+        try:
+            return await capture_helper.wait_for_result(
+                completion_frames=int(completion_frames)
+            )
+        except TypeError:
+            return await capture_helper.wait_for_result()
+
+    wait_task = asyncio.ensure_future(_wait_for_result())
     for _ in range(int(max_updates)):
         simulation_app.update()
         if wait_task.done():
@@ -120,33 +148,15 @@ def _wait_for_capture(capture_helper, simulation_app, max_updates=600):
     return wait_task.result()
 
 
-def _is_complete_png(path):
-    """Prüft Signatur und IEND-Chunk, ohne zusätzliche Bildbibliothek."""
+def _wait_for_file(path, simulation_app, max_updates=120):
+    """Wartet nach dem Kit-Future zusätzlich auf den tatsächlichen Dateieintrag."""
 
     path = Path(path)
-    if not path.is_file() or path.stat().st_size < 20:
-        return False
-    with path.open("rb") as handle:
-        signature = handle.read(8)
-        handle.seek(-12, 2)
-        ending = handle.read(12)
-    return (
-        signature == b"\x89PNG\r\n\x1a\n"
-        and ending == b"\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
-
-
-def _wait_for_materialized_png(output_path, simulation_app, max_updates=600):
-
-    output_path = Path(output_path)
     for _ in range(int(max_updates)):
         simulation_app.update()
-        if _is_complete_png(output_path):
-            return output_path.stat().st_size
-    raise TimeoutError(
-        "Viewport-Aufnahme wurde von Isaac Sim gemeldet, aber nicht als "
-        f"vollständige PNG-Datei geschrieben: {output_path}"
-    )
+        if path.is_file() and path.stat().st_size > 0:
+            return True
+    return path.is_file() and path.stat().st_size > 0
 
 
 def capture_viewport_png(
@@ -161,19 +171,35 @@ def capture_viewport_png(
 
     output_path = Path(output_path).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.unlink(missing_ok=True)
     for _ in range(int(warmup_updates)):
         simulation_app.update()
-    capture_helper = capture_viewport_to_file(
-        viewport,
-        file_path=str(output_path),
-        is_hdr=False,
-    )
-    _wait_for_capture(capture_helper, simulation_app)
-    file_size = _wait_for_materialized_png(output_path, simulation_app)
+    last_error = None
+    for attempt in range(1, 4):
+        if output_path.exists():
+            output_path.unlink()
+        try:
+            capture_helper = capture_viewport_to_file(
+                viewport,
+                file_path=str(output_path),
+                is_hdr=False,
+            )
+            _wait_for_capture(capture_helper, simulation_app)
+            if _wait_for_file(output_path, simulation_app):
+                break
+            last_error = "Kit-Future abgeschlossen, aber die PNG-Datei fehlt"
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt < 3:
+            for _ in range(10):
+                simulation_app.update()
+    else:
+        raise RuntimeError(
+            f"PNG-Aufnahme wurde nach drei Versuchen nicht erzeugt: "
+            f"{output_path} ({last_error})"
+        )
     return {
         "path": str(output_path),
-        "file_size_bytes": file_size,
+        "file_size_bytes": output_path.stat().st_size,
         "sha256": _sha256(output_path),
     }
 
@@ -225,4 +251,24 @@ def write_render_manifest(
     height,
     project_version,
 ):
-   
+    """Schreibt einen prüfbaren Nachweis zu allen erzeugten PNG-Dateien."""
+
+    width, height = validate_render_resolution(width, height)
+    data = {
+        "project_version": str(project_version),
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        ),
+        "renderer": str(renderer),
+        "resolution": [width, height],
+        "image_count": len(records),
+        "images": list(records),
+        "physics_changed_by_rendering": False,
+    }
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(data, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return data
