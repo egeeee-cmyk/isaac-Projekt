@@ -1,6 +1,3 @@
-"""Parallele MuJoCo-basierte Montageversuche in NVIDIA Isaac Sim
-"""
-
 import argparse
 from pathlib import Path
 import sys
@@ -26,6 +23,22 @@ def parse_arguments():
         help=(
             "Erzwingt den freigegebenen Studienmodus: headless, 100 "
             "Umgebungen, 50 KET12 und 50 USB."
+        ),
+    )
+    parser.add_argument(
+        "--usb-fine-study",
+        action="store_true",
+        help=(
+            "Headless-USB-Studie mit 0,1-mm-Y-Schritten von -4,0 bis "
+            "+4,0 mm, fünf X-Steifigkeiten und zwei Wiederholungen."
+        ),
+    )
+    parser.add_argument(
+        "--visual-100",
+        action="store_true",
+        help=(
+            "Zeigt 100 räumlich getrennte Umgebungen sichtbar für eine "
+            "Videoaufnahme; dies ist kein Headless-Qualitätslauf."
         ),
     )
     parser.add_argument(
@@ -61,6 +74,14 @@ def parse_arguments():
         "--show-ur5e",
         action="store_true",
         help="Laedt die UR5e-/Finray-CAD-Geometrie im sichtbaren Debuglauf.",
+    )
+    parser.add_argument(
+        "--all-ur5e",
+        action="store_true",
+        help=(
+            "Laedt die UR5e-CAD-Geometrie in jeder sichtbaren Umgebung. "
+            "Erhoeht die GPU- und Startzeit deutlich."
+        ),
     )
     parser.add_argument(
         "--trace-all",
@@ -113,7 +134,11 @@ def parse_arguments():
     if unknown:
         print(f"Isaac/Kit-Zusatzargumente werden ignoriert: {unknown}")
     if args.visual_demo and (
-        args.headless or args.headless_study_100 or args.single_validation
+        args.headless
+        or args.headless_study_100
+        or args.usb_fine_study
+        or args.visual_100
+        or args.single_validation
     ):
         parser.error(
             "--visual-demo ist nicht mit einem Headless-/Validierungsmodus "
@@ -123,6 +148,21 @@ def parse_arguments():
         parser.error(
             "--visual-demo enthält fest KET12 und USB und darf nicht mit "
             "--task kombiniert werden."
+        )
+    if args.visual_100 and (
+        args.headless
+        or args.headless_study_100
+        or args.usb_fine_study
+        or args.single_validation
+        or args.task is not None
+    ):
+        parser.error(
+            "--visual-100 ist ein sichtbarer Gesamtmodus und darf nicht "
+            "mit Headless-, Validierungs- oder --task-Optionen kombiniert werden."
+        )
+    if args.headless_study_100 and args.usb_fine_study:
+        parser.error(
+            "--headless-study-100 und --usb-fine-study sind getrennte Studienmodi."
         )
     if args.visual_demo:
         args.debug_two_envs = True
@@ -142,15 +182,38 @@ def parse_arguments():
         args.headless = True
         args.num_envs = 100
         args.trace_all = False
+    if args.usb_fine_study:
+        if args.debug_two_envs or args.single_validation:
+            parser.error(
+                "--usb-fine-study ist nicht mit Debug-/Validierungsmodus "
+                "kombinierbar."
+            )
+        args.headless = True
+        args.num_envs = 810
+        args.trace_all = False
+    if args.visual_100:
+        args.num_envs = 100
+        args.headless = False
+        args.show_ur5e = True
+        args.all_ur5e = True
+        args.trace_all = True
+        args.export_renderings = True
+        args.render_views = ("overview",)
+        if args.output_dir is None:
+            args.output_dir = "results/visual_100"
     if args.debug_two_envs:
         args.num_envs = 2
         args.headless = False
         args.show_ur5e = True
+        # Der Debuglauf bleibt bewusst leichtgewichtig.
+        args.all_ur5e = False
     if args.single_validation:
         args.num_envs = 1
         args.headless = True
     if args.export_renderings and args.headless:
         parser.error("--export-renderings benötigt einen sichtbaren Isaac-Modus.")
+    if args.all_ur5e and args.headless:
+        parser.error("--all-ur5e benötigt einen sichtbaren Isaac-Modus.")
     if (
         args.render_width < 640
         or args.render_height < 360
@@ -231,11 +294,13 @@ from scene import (
     set_target,
 )
 from study_reporting import (
+    USB_FINE_STUDY_COUNT,
     parameter_plan_rows,
     prepare_results_directory,
     resolve_results_dir,
     utc_now_iso,
     validate_headless_100_plan,
+    validate_usb_fine_plan,
     verify_physics_baseline,
     write_automatic_evaluation,
     write_json,
@@ -334,6 +399,7 @@ def run():
         ARGS.num_envs,
         task_override=ARGS.task,
         validation_mode=ARGS.single_validation,
+        usb_fine_mode=ARGS.usb_fine_study,
     )
     results_dir = resolve_results_dir(PROJECT_DIR, ARGS)
     prepare_results_directory(
@@ -357,18 +423,24 @@ def run():
             "gesicherten Baseline ueberein."
         )
 
-    if ARGS.headless_study_100:
-        plan_check = validate_headless_100_plan(parameters)
+    if ARGS.headless_study_100 or ARGS.usb_fine_study:
+        plan_check = (
+            validate_usb_fine_plan(parameters)
+            if ARGS.usb_fine_study
+            else validate_headless_100_plan(parameters)
+        )
         write_json(results_dir / "parameter_plan_check.json", plan_check)
         if not plan_check["passed"]:
             raise RuntimeError(
-                "Ungueltiger Headless-100er-Plan: "
+                "Ungueltiger Studienplan: "
                 + " ".join(plan_check["issues"])
             )
-        write_rows(
-            results_dir / "parameter_plan_100.csv",
-            parameter_plan_rows(parameters),
+        plan_filename = (
+            "parameter_plan_usb_fine.csv"
+            if ARGS.usb_fine_study
+            else "parameter_plan_100.csv"
         )
+        write_rows(results_dir / plan_filename, parameter_plan_rows(parameters))
     write_run_manifest(
         results_dir / "run_manifest.json",
         ARGS,
@@ -438,11 +510,15 @@ def run():
 
     robot_placements = {}
     if ARGS.show_ur5e and not ARGS.headless:
+        ur5e_environments = (
+            environments if ARGS.all_ur5e else environments[:2]
+        )
         print(
-            "[Setup 4/6] UR5e-CAD laden; das kann kurz dauern ...",
+            "[Setup 4/6] UR5e-CAD laden; "
+            f"{len(ur5e_environments)} Arme, das kann kurz dauern ...",
             flush=True,
         )
-        for index, env in enumerate(environments[:2], start=1):
+        for index, env in enumerate(ur5e_environments, start=1):
             initial_target = target_pose(env.parameters.task_id, 0.0)
             desired_tcp = env.origin + initial_target.position_xyz_m
             joint_positions = presentation_joint_positions(
@@ -462,7 +538,7 @@ def run():
             )
             robot_placements[env.parameters.env_id] = placement
             print(
-                f"  UR5e {index}/{min(2, len(environments))} geladen.",
+                f"  UR5e {index}/{len(ur5e_environments)} geladen.",
                 flush=True,
             )
             tcp_error = np.linalg.norm(
@@ -650,7 +726,13 @@ def run():
     )
     if trace_rows:
         write_rows(results_dir / "debug_trace.csv", trace_rows)
-    expected_count = 100 if ARGS.headless_study_100 else len(parameters)
+    expected_count = (
+        USB_FINE_STUDY_COUNT
+        if ARGS.usb_fine_study
+        else 100
+        if ARGS.headless_study_100
+        else len(parameters)
+    )
     automatic_report = write_automatic_evaluation(
         results_dir,
         rows,
